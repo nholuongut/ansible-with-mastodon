@@ -1,0 +1,12 @@
+---
+
+- name: Install Redis packages
+  package:
+    name: "{{ item.package }}"
+    update_cache: yes
+    #This makes the package module non-OS generic
+    #https://docs.ansible.com/ansible/latest/collections/ansible/builtin/package_module.html
+    #    state: latest
+    #    install_recommends: no
+  become: yes
+  with_items: "{{ redis.packages }}"

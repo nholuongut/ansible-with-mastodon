@@ -1,0 +1,188 @@
+---
+#We need to enable the service first or we will not have the appropriate folders generated.
+- name: "Start and enable NGINX service"
+  become: yes
+  #Workaround for "Interactive authentication required" issue
+  become_user: root
+  service: "name={{ item }} state=started enabled=yes"
+  with_items:
+  - nginx
+
+- name: "Set NGINX to run under {{ mastodon_user }} to avoid permission issues"
+  become: yes
+  lineinfile:
+    dest: "/etc/nginx/nginx.conf"
+    regexp: "ˆuser"
+    line: "user mastodon;"
+    state: present
+
+- name: "Ensure that NGINX doesn't run under the user nginx"
+  become: yes
+  lineinfile:
+    dest: "/etc/nginx/nginx.conf"
+    regexp: "user.nginx;"
+    line: "user nginx;"
+    state: absent
+  when:
+    - ansible_os_family == "RedHat"
+
+- name: "Ensure that NGINX doesn't run under the user www-data"
+  become: yes
+  lineinfile:
+    dest: "/etc/nginx/nginx.conf"
+    regexp: "user.www-data;"
+    line: "user www-data;"
+    state: absent
+  when:
+    - ansible_os_family == "Debian"
+
+- name: Copy nginx config
+  template: 
+    src: ../files/nginx/mastodon.conf.j2
+    dest: /etc/nginx/sites-available/mastodon.conf
+  when:
+    - ansible_os_family == "Debian"
+    - mastodon_host is defined
+  
+- name: Symlink enabled site
+  file:
+    src: "/etc/nginx/sites-available/mastodon.conf"
+    dest: "/etc/nginx/sites-enabled/mastodon.conf"
+    state: link
+  when:
+    - ansible_os_family == "Debian"
+    - mastodon_host is defined
+
+- name: Copy nginx config with RHEL folder stucture
+  template: 
+    src: ../files/nginx/mastodon.conf.j2
+    dest: /etc/nginx/conf.d/mastodon.conf
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+- name: Create folder structure for Mastodon public folder
+  file: 
+    path: "{{ mastodon_nginx_symlink }}"
+    state: directory
+    owner: "{{ mastodon_user }}"
+    group: "nginx"
+    recurse: yes
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+- name: Create folder structure for Mastodon public folder
+  file: 
+    path: "{{ mastodon_nginx_symlink }}"
+    state: directory
+    owner: "{{ mastodon_user }}"
+    group: "www-data"
+    recurse: yes
+  when:
+    - ansible_os_family == "Debian"
+    - mastodon_host is defined
+
+- name: Create a symbolic link of Mastodon public folder to comply with SELinux policy
+  become: yes
+  file: 
+    src: "{{ mastodon_home }}/{{ mastodon_path }}/public"
+    dest: "{{ mastodon_nginx_symlink }}"
+    state: link
+    owner: "{{ mastodon_user }}"
+    group: "nginx"
+    force: yes
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+- name: Create a symbolic link of Mastodon public folder
+  become: yes
+  file: 
+    src: "{{ mastodon_home }}/{{ mastodon_path }}/public"
+    dest: "{{ mastodon_nginx_symlink }}"
+    state: link
+    owner: "{{ mastodon_user }}"
+    group: "www-data"
+    force: yes
+  when:
+    - ansible_os_family == "Debian"
+    - mastodon_host is defined
+
+- name: Permit NGINX SELinux permission to access filesystem
+  become: yes
+  shell: "setsebool -P httpd_read_user_content 1"
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+- name: Permit SELinux permission to allow NGINX to make proxy connections with httpd_can_network_connect
+  become: yes
+  shell: "setsebool -P httpd_can_network_connect 1"
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+- name: Permit SELinux permission to allow NGINX to make proxy connections with httpd_can_network_relay
+  become: yes
+  shell: "setsebool -P httpd_can_network_relay 1"
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+#Reading and writing into users home directories as a web server or executing any binary as systemd service is
+#really pretty anomalous behaviour. SELinux is completely right to flag this as it looks like we're an attacker. 
+#Potential security issue?
+
+- name: Permit SELinux permission to allow NGINX to read contents of home folders (Required for Mastodon)
+  become: yes
+  shell: "setsebool -P httpd_enable_homedirs on"
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+- name: Change SELinux properties of Mastodon symlink
+  become: yes
+  shell: "chcon -Rt httpd_sys_content_t {{ mastodon_nginx_symlink }}"
+  when:
+    - ansible_os_family == "RedHat"
+    - mastodon_host is defined
+
+- name: "Ensure that we have correct file permissions for /var/lib/nginx/ as we are not running NGINX under default user"
+  become: yes
+  become_user: root
+  file:
+    path: "/var/lib/nginx/"
+    owner: "{{ mastodon_user }}"
+    group: "nginx"
+    recurse: yes
+  when:
+    - ansible_os_family == "RedHat"
+
+- name: "Ensure that we have correct file permissions for /var/lib/nginx/ as we are not running NGINX under default user"
+  become: yes
+  become_user: root
+  file:
+    path: "/var/lib/nginx/"
+    owner: "{{ mastodon_user }}"
+    group: "www-data"
+    recurse: yes
+  when:
+    - ansible_os_family == "Debian"
+
+- name: Restart nginx
+  become: yes
+  #Workaround for "Interactive authentication required" issue
+  become_user: root
+  service: name=nginx state=restarted
+  tags:
+    - systemd
+
+- name: Check if Mastodon instance is up and running
+  uri:
+    url: 'https://{{ mastodon_host }}/about'
+    validate_certs: no
+  register: result
+  until: 'result.status == 200'
+  retries: 10
+  delay: 5

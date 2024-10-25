@@ -1,0 +1,36 @@
+---
+
+- name: Check if Python is installed
+  raw: command -v python3
+  register: python_installed
+  ignore_errors: True
+
+- name: Check if yum is installed
+  raw: command -v yum
+  register: yum_installed
+  when: python_installed is failed
+  ignore_errors: True
+
+#This checks if running higher Redhat version than 7
+- name: Check if dnf is installed
+  raw: command -v dnf
+  register: dnf_installed
+  when: python_installed is failed
+  ignore_errors: True
+
+- name: Check if apt is installed
+  raw: command -v apt
+  register: apt_installed
+  when: python_installed is failed
+  ignore_errors: True
+
+- name: Bootstrap Python on RHEL
+  raw: yum install -y python3
+  when: python_installed is failed and yum_installed is succeeded
+  become: yes
+
+- name: Bootstrap Python on Ubuntu Linux
+  raw: apt update && apt install -y python3
+  when: python_installed is failed and apt_installed is succeeded
+  become: yes
+

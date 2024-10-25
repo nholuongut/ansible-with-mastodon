@@ -1,0 +1,113 @@
+file:
+  /etc/os-release:
+    exists: true
+    contains:
+      - {{getEnv "TARGET" "ubuntu"}}
+  /home/mastodon/.bashrc:
+    exists: true
+    owner: "mastodon"
+    group: "mastodon"
+    filetype: "file"
+    contains: ["rbenv init -", "PATH="]
+  /usr/bin/node:
+    exists: true
+    filetype: "file"
+    mode: "0755"
+  /etc/letsencrypt/live/mastodon.local/fullchain.pem:
+    exists: true
+    filetype: "symlink"
+    mode: "0777"
+  /etc/letsencrypt/live/mastodon.local/privkey.pem:
+    exists: true
+    filetype: "symlink"
+    mode: "0777" 
+  /home/mastodon/.rbenv/plugins/ruby-build/bin/ruby-build:
+    exists: true
+    filetype: "file"
+{{- if eq (getEnv "TARGET" "ubuntu") "rhel" }}
+    mode: "0755"
+{{- else }}
+    mode: "0775"
+{{- end }}
+    owner: "mastodon"
+  /home/mastodon/live:
+    exists: true
+    filetype: "directory"
+    owner: "mastodon"
+{{- if eq (getEnv "TARGET" "ubuntu") "rhel" -}}
+{{- $nginxConfigLocation := "conf.d"}}
+  /etc/nginx/{{- $nginxConfigLocation }}/mastodon.conf:
+    exists: true
+    filetype: "file"
+{{- else -}}
+{{- $nginxConfigLocation := "sites-available"}}
+{{- $nginxConfigEnabled := "sites-enabled"}}
+  /etc/nginx/{{- $nginxConfigLocation }}/mastodon.conf:
+    exists: true
+    filetype: "file"
+  /etc/nginx/{{- $nginxConfigEnabled }}/mastodon.conf:
+    exists: true
+    filetype: "symlink"
+{{- end -}}
+{{range .Vars.service_files }}
+  {{.}}:
+    exists: true
+    filetype: "file"
+{{end}}
+service:
+{{range .Vars.services }}
+  {{.}}:
+    enabled: true
+    running: true
+{{end}}
+
+command:
+  ruby:
+  #Previous implementation was directly checking against a fixed version and required manual update every time mastodon updated it's ruby version
+  #With this current implementation, we directly check against the ruby version requested by Mastodon against what eventually got installed
+  #Also can't use True or False as stdout output because Ubuntu is doing something funny and turning the string into a boolean and it fails the test. No I don't know why.
+    exit-status: 0
+    exec: >-
+        [[ "$(sudo -u mastodon -i cat /home/mastodon/live/.ruby-version)" == "$(sudo -u mastodon -i ruby -v | sed 's/^.*[^0-9]\([0-9]*\.[0-9]*\.[0-9]*\).*$/\1/')" ]] && echo "Match" || echo "No Match"
+    stdout:
+      - "Match" 
+  crontab:
+    exit-status: 0
+    exec: "sudo crontab -l -u mastodon"
+    stdout:
+      - "15 1 * * * /bin/bash -c 'export PATH=\"$HOME/.rbenv/bin:$PATH\"; eval \"$(rbenv init -)\"; cd /home/mastodon/live && RAILS_ENV=production ./bin/tootctl media remove'"
+{{if eq .Env.TARGET "ubuntu"}}
+  ufw:
+    exit-status: 0
+    exec: "ufw status"
+    stdout:
+{{range .Vars.firewall_open_ports }}
+      - "/{{.}}/tcp \\s* ALLOW \\s* Anywhere/"
+      - "/{{.}}/tcp \\(v6\\) \\s* ALLOW \\s* Anywhere \\(v6\\)/"
+{{end}}
+{{end}}
+  postgres:
+    exit-status: 0
+    exec: "PGPASSWORD=CHANGEME psql -d mastodon_instance -h 127.0.0.1 -U mastodon -c 'CREATE TABLE test (v varchar(20)); DROP TABLE test;'"
+
+http:
+  https://mastodon.local/:
+    status: 200
+    allow-insecure: true
+    no-follow-redirects: false
+    body: [ mastodon.local ]
+
+user:
+  mastodon:
+    exists: true
+    groups:
+      - mastodon
+    home: /home/mastodon
+    shell: /bin/bash
+package:
+{{if eq .Env.TARGET "ubuntu"}}
+{{range .Vars.packages.ubuntu }}
+  {{.}}:
+    installed: true
+{{end}}
+{{end}}

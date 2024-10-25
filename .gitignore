@@ -1,0 +1,10 @@
+/playbook.retry
+/.vagrant
+/.vagrant/*
+/.vagrant/**/*
+/*.log
+/env
+/vendor
+host
+.DS_Store
+secrets.yml
